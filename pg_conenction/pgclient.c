@@ -9,6 +9,12 @@
 #define BUFFER_HOSTADDR 16
 #define BUFFER_PORT 6
 
+/*
+	Author: Bartlomiej Barszczewski
+	License: MIT
+	compilation : sudo gcc -o pgclient pgclient.c -lpq -lcjson -Wall -std=c2x -ggdb
+		run : ./build/pgclient		
+*/
 
 struct PGconfig {
 	char hostaddr[BUFFER_HOSTADDR];
@@ -37,40 +43,22 @@ PGconn * PQconnect(char * hostaddr, char * port, char * dbname, char * user, cha
 		password,
 		NULL
 	};
+	int expand_dbname = 0;
 	
-	size_t z = 0;
-	PGconn * conn = PQconnectdbParams( (const char **) PGkeywords, (const char **) values, z);
+	PGconn * conn = PQconnectdbParams( 
+		(const char **) PGkeywords, 
+		(const char **) values,
+	 	expand_dbname
+	);
 	
-
 	if(PQstatus(conn) != CONNECTION_OK) {
 		fprintf(stderr, "Connection to database %s failed\n", dbname);
 		PQfinish(conn);
 		exit(1);
 	}
-
-	printf("Connection to database %s SUCCESS\n", dbname);
 	
 	return conn;
 }
-
-
-PGresult * execute(PGconn * conn, char * query) {
-	
-	if(strlen(query) == 0 || query == NULL) {
-		fprintf(stderr, "Execute failed, query is empty!");
-		exit(3);
-	}
-
-	PGresult * result = PQexec(conn, query);
-
-	if(PQresultStatus(result) != PGRES_TUPLES_OK) {
-		puts("Failed, did not get any data!\n");
-		return NULL;
-	}
-
-	return result;
-}
-
 
 int getStrArrayLength(const char * const * array) {
 	
@@ -152,13 +140,31 @@ struct PGconfig getConfig(char * fname) {
 int countParams( const int * arr ) {
 	int nParams = 0;
 	while(*arr == 0) {
-		formats++;
+		arr++;
 		nParams++;
 	}
 	return nParams;
 }
 
-void executeParams(
+
+PGresult * execute(PGconn * conn, char * query) {
+	
+	if(strlen(query) == 0 || query == NULL) {
+		fprintf(stderr, "Execute failed, query is empty!");
+		exit(3);
+	}
+
+	PGresult * result = PQexec(conn, query);
+
+	if(PQresultStatus(result) != PGRES_TUPLES_OK) {
+		puts("Failed, did not get any data!\n");
+		return NULL;
+	}
+
+	return result;
+}
+
+PGresult * executeParams(
 	PGconn * conn, 
 	const char * command, 
 	const char * const * paramValues,
@@ -176,8 +182,7 @@ void executeParams(
 	const int * paramLengths = (const int *) paramLen;
 	
 	int resultFormat = 0;
-	
-	printf("nParams %d\n", nParams);
+
 	PGresult * res = PQexecParams(
 		conn,
 		command,
@@ -194,6 +199,8 @@ void executeParams(
 			__LINE__, __FILE__, PQresultErrorMessage(res));
 		exit(7);
 	}
+	
+	return res;
 }
 
 
@@ -256,4 +263,3 @@ int main() {
 	
 	return 0;
 }
-
