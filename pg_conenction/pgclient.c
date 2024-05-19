@@ -4,25 +4,30 @@
 #include <libpq-fe.h>
 #include <cjson/cJSON.h>
 
+#define READ_MODE "r"
+#define BUFFER_MAX 255
+#define BUFFER_HOSTADDR 16
+#define BUFFER_PORT 6
+
 
 struct PGconfig {
-	char hostaddr[16];
-	char port[6];
-	char dbname[255];
-	char user[255];
-	char password[255];
+	char hostaddr[BUFFER_HOSTADDR];
+	char port[BUFFER_PORT];
+	char dbname[BUFFER_MAX];
+	char user[BUFFER_MAX];
+	char password[BUFFER_MAX];
 };
 
+const char *PGkeywords[] = {
+	"hostaddr",
+	"port",
+	"dbname",
+	"user",
+	"password",
+	NULL
+};
 
-PGconn * pg_connect(char * hostaddr, char * port, char * dbname, char * user, char * password) {	
-	const char *keywords[] = {
-		"hostaddr",
-		"port",
-		"dbname",
-		"user",
-		"password",
-		NULL
-	};
+PGconn * PQconnect(char * hostaddr, char * port, char * dbname, char * user, char * password) {	
 
 	const char *values[] = {
 		hostaddr,
@@ -34,7 +39,7 @@ PGconn * pg_connect(char * hostaddr, char * port, char * dbname, char * user, ch
 	};
 	
 	size_t z = 0;
-	PGconn * conn = PQconnectdbParams( (const char **) keywords, (const char **) values, z);
+	PGconn * conn = PQconnectdbParams( (const char **) PGkeywords, (const char **) values, z);
 	
 
 	if(PQstatus(conn) != CONNECTION_OK) {
@@ -66,20 +71,57 @@ PGresult * execute(PGconn * conn, char * query) {
 	return result;
 }
 
-struct PGconfig load_config(char * fname) {
-	const char * READ_MODE = "r";
-	FILE *fptr = fopen(fname, READ_MODE);
+
+int getStrArrayLength(const char * const * array) {
 	
+	return ((int) (sizeof(array) / sizeof(const char * const *)));
+}
+
+void cJSON_GetValueKey( cJSON * json,  const char * kname, char * buffer) {
+	cJSON * key = cJSON_GetObjectItemCaseSensitive(json, kname);
+
+	if( cJSON_IsString(key) && (key->valuestring != NULL ) ) {
+		size_t size_buffer = strlen(key->valuestring);
+		strncpy( buffer, key->valuestring, size_buffer);
+		buffer[size_buffer] = '\0';
+	}
+}
+
+
+unsigned long readConfigFile( FILE * fptr ) {	
 	if(fptr == NULL) {
-		fprintf(stderr, "Failed to open file: %s\n", fname);
+		fprintf(stderr, "Failed to open config file: \n");
 		exit(4);
 	}
 
 	fseek(fptr, 0, SEEK_END);
-	long length = ftell(fptr);
+	unsigned long length = ftell(fptr);
 	fseek(fptr, 0, SEEK_SET);
 	
-	char * json_buffer = malloc( length + 1);
+	return length;
+}
+
+
+void cJSON_CheckError(cJSON * json, char * json_buffer ) {
+	if( json == NULL) {
+		const char * error_ptr = cJSON_GetErrorPtr();
+		
+		if(error_ptr != NULL) {
+			fprintf(stderr, "Error json read: %s\n", error_ptr);
+		}
+
+		free(json_buffer);
+		cJSON_Delete(json);
+		exit(5);
+	}
+}
+
+struct PGconfig getConfig(char * fname) {
+
+	FILE *fptr = fopen(fname, READ_MODE);
+	unsigned long length = readConfigFile(fptr);
+
+	char * json_buffer = malloc( length + 1 );
 
 	int len = fread(json_buffer, 1, length, fptr);
 	fclose(fptr);
@@ -93,95 +135,121 @@ struct PGconfig load_config(char * fname) {
 
 	cJSON * json = cJSON_Parse(json_buffer);
 	
-	if( json == NULL) {
-		const char * error_ptr = cJSON_GetErrorPtr();
-		
-		if(error_ptr != NULL) {
-			fprintf(stderr, "Error json read: %s\n", error_ptr);
-		}
-
-		free(json_buffer);
-		cJSON_Delete(json);
-		exit(5);
-	}
-
+	cJSON_CheckError(json, json_buffer);
+	
 	struct PGconfig config;
 
-	cJSON * hostaddr = cJSON_GetObjectItemCaseSensitive(json, "hostaddr");
-
-	if(cJSON_IsString(hostaddr) && ( hostaddr->valuestring != NULL )) {
-		strncpy(config.hostaddr, hostaddr->valuestring, strlen(hostaddr->valuestring));
-		config.hostaddr[ strlen(hostaddr->valuestring) ] = '\0';	
-	}
-
-	cJSON * port = cJSON_GetObjectItemCaseSensitive(json, "port");
-	
-	if(cJSON_IsString(port) && ( port->valuestring != NULL)) {
-		strncpy(config.port,port->valuestring, strlen(port->valuestring));
-		config.port[strlen(port->valuestring)] = '\0';
-	}
-	
-	cJSON * dbname = cJSON_GetObjectItemCaseSensitive(json, "dbname");
-	
-	if(cJSON_IsString(dbname) && ( dbname->valuestring != NULL)) {
-		strncpy(config.dbname,dbname->valuestring, strlen(dbname->valuestring));
-		config.dbname[strlen(dbname->valuestring)] = '\0';
-	}
-
-	cJSON * user = cJSON_GetObjectItemCaseSensitive(json, "user");
-	
-	if(cJSON_IsString(user) && ( user->valuestring != NULL)) {
-		strncpy(config.user, user->valuestring, strlen(user->valuestring) );
-		config.user[ strlen(user->valuestring)] = '\0';
-	}
-	
-	cJSON * password = cJSON_GetObjectItemCaseSensitive(json, "password");
-	
-	if(cJSON_IsString(password) && ( password->valuestring != NULL )) {
-		strncpy(config.password, password->valuestring, strlen(password->valuestring));
-		config.password[strlen(password->valuestring)] = '\0';
-	}
-
-	printf("hostaddr = %s\n", config.hostaddr);
-	printf("user = %s\n", config.user);
+	cJSON_GetValueKey(json, PGkeywords[0], config.hostaddr);
+	cJSON_GetValueKey(json, PGkeywords[1], config.port);
+	cJSON_GetValueKey(json, PGkeywords[2], config.dbname);
+	cJSON_GetValueKey(json, PGkeywords[3], config.user);
+	cJSON_GetValueKey(json, PGkeywords[4], config.password);
 
 	cJSON_Delete(json);
 	return config;	
 }
 
-int main() {
-	struct PGconfig cfg = load_config("pgconfig.json");
+int countParams( const int * arr ) {
+	int nParams = 0;
+	while(*arr == 0) {
+		formats++;
+		nParams++;
+	}
+	return nParams;
+}
+
+void executeParams(
+	PGconn * conn, 
+	const char * command, 
+	const char * const * paramValues,
+	const int * paramFormats
+) {
+	const int * formats = paramFormats;
+	int nParams = countParams(formats);
+
+	int paramLen[nParams];
 	
-	PGconn * conn = pg_connect( 
+	for(int x = 0; x < nParams; x += 1) {
+		paramLen[x] = sizeof(paramValues[x]);
+	}
+	
+	const int * paramLengths = (const int *) paramLen;
+	
+	int resultFormat = 0;
+	
+	printf("nParams %d\n", nParams);
+	PGresult * res = PQexecParams(
+		conn,
+		command,
+		nParams,
+		NULL,
+		paramValues,
+		paramLengths,
+		paramFormats,
+		resultFormat		
+	);
+	
+	if(PQresultStatus(res) != PGRES_COMMAND_OK) {
+		fprintf(stderr, "[%d] %s -> PQexecParams failed! %s\n", 
+			__LINE__, __FILE__, PQresultErrorMessage(res));
+		exit(7);
+	}
+}
+
+
+int main() {
+	struct PGconfig cfg = getConfig("pgconfig.json");
+	
+	PGconn * conn = PQconnect( 
 		cfg.hostaddr, 
 		cfg.port, 
 		cfg.dbname, 
 		cfg.user,
 		cfg.password
 	);
-	printf("%p \n", conn);
+
 	int rows = 0;
 	int cols = 0;
 	int count_tuples = 0;
 	int count_fields = 0;
-
 
 	if(PQstatus(conn) == CONNECTION_BAD) {
 		fprintf(stderr, "Connection to failed\n");
 		exit(2);
 	}
 	
-	PGresult * res = execute(conn, "select * from students");
+	char * SQL_SELECT = "SELECT * FROM students";
+	PGresult * res = execute(conn, SQL_SELECT);
 	
 	count_tuples = PQntuples(res);
 	count_fields = PQnfields(res);		
 
 	for(rows = 0; rows < count_tuples; rows++) {
 		for(cols = 0; cols < count_fields; cols++) {
-			printf("%s\t\t", PQgetvalue(res, rows, cols));
+			printf(" %8s\t|", PQgetvalue(res, rows, cols));
 		}
-		puts("");
+		puts("\n----------------------------------------------");
 	}
+
+
+	const char * SQL_INSERT = "INSERT INTO students(firstname, lastname, rating) VALUES($1, $2, $3)";
+	char firstname[] = "Marta";
+	char lastname[] = "Oleg";
+	char rating[] = "5";
+	
+	const char * const paramValues[] = {
+		firstname,
+		lastname,
+		rating
+	};
+
+	const int paramFormats[] = { 0, 0, 0 };
+	executeParams(
+		conn, 
+		SQL_INSERT,
+		paramValues,
+		paramFormats
+	);
 	
 	PQclear(res);
 	PQfinish(conn);
